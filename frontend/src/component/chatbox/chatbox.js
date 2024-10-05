@@ -1,49 +1,179 @@
-import React from "react";
-import "./chatbox.css";
+import React, { useEffect, useRef, useState } from "react";
+import "./chatbox.css"
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faRobot, faUser } from "@fortawesome/free-solid-svg-icons";
+import {
+  faXmark,
+  faMicrophone,
+  faPaperPlane,
+} from "@fortawesome/free-solid-svg-icons";
+import { useSpeechRecognition, useSpeechSynthesis } from "react-speech-kit";
+import Chat from "../chat/chat";
+import ChatApi from "../../chatApi/chatApi"
 
-export default function Chatbox(props) {
-  const { data, onAction } = props;
-  if (data["created_by"] === "server") {
-    return (
-      <div className="w-full flex items-end p-2">
-        <FontAwesomeIcon className="mb-4" icon={faRobot} />
-        <div>
-          <div className="chat-message-server bg-yellow-100 flex items-center justify-end m-1 p-2 w-72 flex-col">
-            <p className=" whitespace-normal w-64">{data.message}</p>
-          </div>
-          <div className="m-1 p-2 w-72">
-            {data["related"] === null ? (
-              <></>
-            ) : (
-              Object.values(data["related"]).map((value, index) => (
-                <button
-                  key={index}
-                  className="direct-btn"
-                  onClick={() => {
-                    onAction(value["tag"], value["text"]);
-                  }}
-                >
-                  {value["text"]}
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-        <span className="flex-1"></span>
-      </div>
-    );
-  } else if (data["created_by"] === "client") {
-    return (
-      <div className="w-full flex items-end p-2">
-        <span className="flex-1"></span>
-        <div className="chat-message-client bg-yellow-200 flex items-center justify-end m-1 p-2 w-72">
-          <p className=" whitespace-normal w-64">{data.message}</p>
-        </div>
-        <FontAwesomeIcon className="mb-2" icon={faUser} />
-      </div>
-    );
+export default function ChatBox(props) {
+  const [chatBoxValue, setChatBoxValue] = useState("");
+  const [micActive, setMicActive] = useState(false);
+  const locked = useRef(false);
+  const inputRef = useRef(null);
+  const divRef = useRef(null)
+  const [chats, setChats] = useState([]);
+
+  const { listen, listening, stop, supported } = useSpeechRecognition({
+    onResult: (result) => {
+      setChatBoxValue(result);
+    },
+  });
+
+  const { speak } = useSpeechSynthesis();
+
+  function updateChats(created_by, message, related = null) {
+    setChats((chats) => [
+      {
+        created_by: created_by,
+        message: message,
+        related: related,
+      },
+      ...chats,
+    ]);
+    if (micActive && created_by === "server") {
+      speak({ text: message });
+    }
   }
-  return <div></div>;
+
+  function onDataReceived(data) {
+    setChatBoxValue("");
+    if (data["status"] === 200) {
+      const related = Object.values(data["related"]);
+      if (related.length === 0) {
+        updateChats("server", data["message"]);
+      } else {
+        updateChats("server", data["message"], related);
+      }
+    } else if (data["status"] === 400) {
+      updateChats("server", data["message"]);
+    }
+    else {
+      updateChats("server", data)
+    }
+    locked.current = false;
+  }
+
+  useEffect(() => {
+    if(chats.length === 0) {
+      ChatApi.direct_request("welcomegreeting").then(onDataReceived)
+    }
+    if(divRef.current){
+      divRef.current.scrollTop = 0
+    }
+  }, [chats.length])
+  
+  console.log("props:", props)
+  
+  return (
+    <div
+      className="chat-box-container flex flex-col"
+      style={{
+        height: props.isActive ? "550px" : 0,
+        width: props.isActive ? "400px" : 0,
+        opacity: props.isActive ? 1 : 0,
+      }}
+    >
+      <div className="chat-box-top bg-red-800 h-11 w-full text-white flex items-center px-5">
+        <h6 className="font-bold mx-2 text-xs">College Enquiry Chatbot</h6>
+        <span className="flex-1" />
+        <button
+          className="speach-btn hover:scale-125 m-5"
+          style={{
+            color: micActive ? "green" : "white",
+          }}
+          onClick={() => {
+            setMicActive(!micActive);
+          }}
+        >
+          <FontAwesomeIcon
+            className="text-xl speach-btn-icon"
+            icon={faMicrophone}
+          />
+        </button>
+        <button
+          className="hover:text-red-400 hover:scale-125"
+          onClick={() => props.toggle()}
+        >
+          <FontAwesomeIcon className="text-xl" icon={faXmark} />
+        </button>
+      </div>
+      <div className="chat-box-middle flex-1" ref={divRef}>
+        <div>
+          {chats.map((item, index) => (
+            <Chat
+              key={index}
+              data={item}
+              onAction={(klass, text) => {
+                if (locked.current) {
+                  return;
+                }
+                locked.current = true;
+                updateChats("client", text);
+                ChatApi.direct_request(klass).then(onDataReceived);
+              }}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="chat-box-bottom bg-red-800 h-16 w-full flex items-center justify-center p-3">
+        <input
+          type="text"
+          className="text-sm"
+          placeholder="Type Here!"
+          autoCapitalize="false"
+          value={chatBoxValue}
+          onChange={(e) => setChatBoxValue(e.target.value)}
+          ref={inputRef}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              if (locked.current) {
+                return;
+              }
+              locked.current = true;
+              updateChats("client", chatBoxValue);
+              ChatApi.query_request(chatBoxValue).then(onDataReceived);
+            }
+          }}
+        />
+        <button
+          className="s2t-mic-btn"
+          style={{
+            color: listening ? "red" : "black",
+          }}
+          onClick={() => {
+            if (!supported) {
+              alert("Sorry! But Your Browser Does Not Supports Voice Inputs");
+              return;
+            }
+            if (listening) {
+              stop();
+              inputRef.current.focus();
+            } else {
+              listen();
+            }
+          }}
+        >
+          <FontAwesomeIcon className="s2t-mic-btn-icon" icon={faMicrophone} />
+        </button>
+        <button
+          className="hover:text-red-500"
+          onClick={() => {
+            if (locked.current) {
+              return;
+            }
+            locked.current = true;
+            updateChats("client", chatBoxValue);
+            ChatApi.query_request(chatBoxValue).then(onDataReceived);
+          }}
+        >
+          <FontAwesomeIcon icon={faPaperPlane} />
+        </button>
+      </div>
+    </div>
+  );
 }
